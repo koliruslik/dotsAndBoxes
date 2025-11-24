@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dots-backend-dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/pom.xml:/app/pom.xml
+      - ./backend/.mvn:/app/.mvn
+      - ./backend/mvnw:/app/mvnw
+    networks:
+      - dots-network
+    command: ./mvnw spring-boot:run
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dots-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+    networks:
+      - dots-network
+    depends_on:
+      - backend
+    command: serve -s . -l 3000
+
+networks:
+  dots-network:
+    driver: bridge
