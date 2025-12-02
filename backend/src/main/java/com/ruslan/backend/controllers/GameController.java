@@ -49,17 +49,37 @@ public class GameController {
         Map<String, Object> response = new HashMap<>();
 
         player.move.playerNumber = currentPlayer;
+
         lines.add(player.move);
 
+        int before = squares.size();
         checkSquares(lines, currentPlayer, player.rows, player.cols);
+        int after = squares.size();
 
-        currentPlayer = currentPlayer == 1 ? 2 : 1;
+        if(after == before) {
+            currentPlayer = currentPlayer == 1 ? 2 : 1;
+        }
+
+        int totalSquares = (player.rows - 1) * (player.cols - 1);
+        String winner = null;
+
+        if(squares.size() == totalSquares) {
+            long p1 = squares.stream().filter(s-> s.playerNumber == 1).count();
+            long p2 = squares.stream().filter(s-> s.playerNumber == 2).count();
+
+            if(p1 > p2) winner = "player1";
+            else if(p2 > p1) winner = "player2";
+            else winner = "winner";
+        }
 
         response.put("success", true);
         response.put("lines", lines);
         response.put("squares", squares);
+        response.put("currentPlayer", currentPlayer);
+        response.put("winner", winner);
         return response;
     }
+
     @PostMapping("/restart")
     public Map<String, Object> restartGame() {
         lines.clear();

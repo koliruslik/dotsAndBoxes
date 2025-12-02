@@ -144,6 +144,11 @@ async function handleCanvasClick(e) {
     } else {
       alert("It's not your turn now or the line is busy!");
     }
+    if(data.winner) {
+      setTimeout(() => {
+        alert("Winner: " + data.winner);
+      }, 10);
+    }
   } catch (err) {
     console.error("Error during move:", err);
   }
@@ -195,7 +200,7 @@ function applyBoardSize() {
 
   applyBtn.style.display = "none";
 
-  fetchGameState();
+  restartGame();
 }
 
 async function restartGame() {
