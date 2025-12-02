@@ -19,6 +19,9 @@ const rowsInput = document.getElementById("rowsInput");
 const colsInput = document.getElementById("colsInput");
 const applyBtn = document.getElementById("applyBtn");
 const restartBtn = document.getElementById("restartBtn");
+const logContainer = document.getElementById("logContainer");
+const difficultySelect = document.getElementById("difficultySelect");
+const difficultyHint = document.getElementById("difficultyHint");
 
 const PLAYER1_COLOR = getComputedStyle(document.documentElement)
   .getPropertyValue('--accent-blue').trim();
@@ -27,15 +30,24 @@ const PLAYER2_COLOR = getComputedStyle(document.documentElement)
 const DOT_COLOR = getComputedStyle(document.documentElement)
   .getPropertyValue('--dot-color')?.trim() || "#333";
 
+const aiStatus = document.getElementById("aiStatus");
+let isGameLocked = false;
+
 rowsInput.value = rows;
 colsInput.value = cols;
-applyBtn.style.display = "none";
+applyBtn.style.visibility = "hidden";
 
 let lines = [];
 let squares = [];
 
+const difficultyInfo = {
+  "2": "Super Fast (< 100ms).",
+  "3": "Normal (~1-3 sec).",
+  "4": "Hard (~5-20 sec)."
+};
+
 setupCanvas();
-fetchGameState();
+updateInputConstraints();
 
 canvas.width = offsetX * 2 + (cols - 1) * cellSize;
 canvas.height = offsetY * 2 + (rows - 1) * cellSize;
@@ -43,11 +55,43 @@ canvas.height = offsetY * 2 + (rows - 1) * cellSize;
 applyBtn.addEventListener("click", applyBoardSize);
 restartBtn.addEventListener("click", restartGame);
 
-rowsInput.addEventListener("input", checkInputChanges);
-colsInput.addEventListener("input", checkInputChanges);
+rowsInput.addEventListener("input", handleInputChange);
+colsInput.addEventListener("input", handleInputChange);
+difficultySelect.addEventListener("change", onDifficultyChange);
 
 canvas.addEventListener("click", handleCanvasClick);
 
+let currentPlayer = 1;
+
+function onDifficultyChange() {
+  const depth = difficultySelect.value;
+  difficultyHint.textContent = difficultyInfo[depth];
+  updateInputConstraints();
+}
+
+function updateInputConstraints() {
+  const maxVal = 6;
+  rowsInput.max = maxVal;
+  colsInput.max = maxVal;
+
+  let changed = false;
+  if (parseInt(rowsInput.value) > maxVal) {
+    rowsInput.value = maxVal;
+    changed = true;
+  }
+  if (parseInt(colsInput.value) > maxVal) {
+    colsInput.value = maxVal;
+    changed = true;
+  }
+}
+
+function handleInputChange(e) {
+  const max = parseInt(e.target.max);
+  if (parseInt(e.target.value) > max) {
+    e.target.value = max;
+  }
+  checkInputChanges();
+}
 
 function drawBoard() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -87,71 +131,125 @@ function drawBoard() {
   }
 }
 
-async function fetchGameState() {
+async function handleCanvasClick(e) {
+  if (isGameLocked) return;
+
+  const clickedLine = getClickedLineFromMouse(e);
+  if (!clickedLine || isLineTaken(clickedLine)) return;
+
   try {
-    const response = await fetch(`${API_BASE}/get-state`);
-    const data = await response.json();
-    lines = data.lines || [];
-    squares = data.squares || [];
-    drawBoard();
-    updateScores();
-  } catch(err) {
-    console.error("Error getting game state:", err);
+    const playerData = await playerMove(clickedLine);
+    currentPlayer = playerData.currentPlayer;
+
+    if (currentPlayer === 2) {
+      setLoadingState(true);
+
+      while (currentPlayer === 2) {
+        await new Promise(r => setTimeout(r, 50));
+
+        const aiData = await makeAIMove();
+        currentPlayer = aiData.currentPlayer;
+
+        if (aiData.winner) break;
+        if (aiData.error) {
+          console.error(aiData.error);
+          break;
+        }
+      }
+    }
+  } catch (error) {
+    console.error("move error:", error);
+    alert("Error connecting to server");
+  } finally {
+    setLoadingState(false);
   }
 }
 
-async function handleCanvasClick(e) {
+async function playerMove(move) {
+  const response = await fetch(`${API_BASE}/make-move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      playerId: "player1",
+      lines,
+      squares,
+      move,
+      rows,
+      cols
+    })
+  });
+  const data = await response.json();
+  updateGameState(data);
+  return data;
+}
+
+async function makeAIMove() {
+  const depth = parseInt(difficultySelect.value);
+
+  const response = await fetch(`${API_BASE}/ai-move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      playerId: "player2",
+      lines,
+      squares,
+      rows,
+      cols,
+      difficulty: depth
+    })
+  });
+  const data = await response.json();
+  updateGameState(data);
+  return data;
+}
+
+function updateGameState(data) {
+  if (!data) return;
+  lines = data.lines || lines;
+  squares = data.squares || squares;
+  currentPlayer = data.currentPlayer;
+  drawBoard();
+  updateScores();
+
+  if (data.winner) setTimeout(() => alert("Winner: " + data.winner), 10);
+
+  if (data.aiLogs) {
+    renderLogs(data.aiLogs);
+  }
+}
+
+function renderLogs(logs) {
+  logContainer.innerHTML = "";
+  logs.forEach(log => {
+    const div = document.createElement("div");
+    div.className = "log-entry";
+    if (log.includes("New Best Move") || log.includes("SELECTED")) {
+      div.classList.add("log-highlight");
+    }
+    if (log.includes("Stats:")) {
+      div.style.color = "#00bcd4";
+      div.style.fontWeight = "bold";
+    }
+    div.textContent = log;
+    logContainer.appendChild(div);
+  });
+  logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+function getClickedLineFromMouse(e) {
   const rect = canvas.getBoundingClientRect();
   const mouseX = e.clientX - rect.left;
   const mouseY = e.clientY - rect.top;
+  return getClickedLine(mouseX, mouseY);
+}
 
-  const clickedLine = getClickedLine(mouseX, mouseY);
-  if (!clickedLine) return;
-
-  const exists = lines.some(line =>
-    (line.x1 === clickedLine.x1 && line.y1 === clickedLine.y1 &&
-      line.x2 === clickedLine.x2 && line.y2 === clickedLine.y2) ||
-    (line.x1 === clickedLine.x2 && line.y1 === clickedLine.y2 &&
-      line.x2 === clickedLine.x1 && line.y2 === clickedLine.y1)
+function isLineTaken(line) {
+  const exists = lines.some(l =>
+    (l.x1 === line.x1 && l.y1 === line.y1 && l.x2 === line.x2 && l.y2 === line.y2) ||
+    (l.x1 === line.x2 && l.y1 === line.y2 && l.x2 === line.x1 && l.y2 === line.y1)
   );
-  if (exists) {
-    alert("The line is already busy!");
-    return;
-  }
-
-  try {
-    const response = await fetch(`${API_BASE}/make-move`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        playerId: "player1",
-        lines: lines,
-        squares: squares,
-        move: clickedLine,
-        rows: rows,
-        cols: cols
-      })
-    });
-
-    const data = await response.json();
-    if (data.success) {
-      lines = data.lines;
-      squares = [...squares, ...data.squares.filter(
-        sq => !squares.some(existing => existing.x === sq.x && existing.y === sq.y)
-      )];
-      drawBoard();
-      updateScores();
-    } else {
-      alert("It's not your turn now or the line is busy!");
-    }
-    if(data.winner) {
-      setTimeout(() => {
-        alert("Winner: " + data.winner);
-      }, 10);
-    }
-  } catch (err) {
-    console.error("Error during move:", err);
-  }
+  if (exists) alert("The line is already busy!");
+  return exists;
 }
 
 function getClickedLine(mouseX, mouseY){
@@ -179,9 +277,14 @@ function getClickedLine(mouseX, mouseY){
   return null;
 }
 
-function applyBoardSize() {
-  rows = parseInt(rowsInput.value);
-  cols = parseInt(colsInput.value);
+async function applyBoardSize() {
+  const newRows = parseInt(rowsInput.value);
+  const newCols = parseInt(colsInput.value);
+
+  const depth = parseInt(difficultySelect.value);
+
+  rows = newRows;
+  cols = newCols;
 
   prevRows = rows;
   prevCols = cols;
@@ -198,9 +301,28 @@ function applyBoardSize() {
   drawBoard();
   updateScores();
 
-  applyBtn.style.display = "none";
+  logContainer.innerHTML = '<div class="log-entry">New game started...</div>';
 
-  restartGame();
+  applyBtn.style.visibility = "hidden";
+
+  try {
+    const response = await fetch(`${API_BASE}/set-size`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows: rows, cols: cols })
+    });
+
+    const data = await response.json();
+    if(data.success){
+      lines = data.lines;
+      squares = data.squares;
+      drawBoard();
+      updateScores();
+    }
+  } catch (err) {
+    console.error("Error setting board size:", err);
+  }
+  await restartGame();
 }
 
 async function restartGame() {
@@ -210,10 +332,14 @@ async function restartGame() {
     lines = [];
     squares = [];
 
+    logContainer.innerHTML = '<div class="log-entry">Game restarted...</div>';
+
     drawBoard();
     updateScores();
   } catch (err) {
     console.error("Error while restarting:", err);
+  } finally {
+    setLoadingState(false);
   }
 }
 
@@ -228,11 +354,17 @@ function updateScores() {
 function checkInputChanges() {
   const rowChanged = parseInt(rowsInput.value) !== prevRows;
   const colChanged = parseInt(colsInput.value) !== prevCols;
-  applyBtn.style.display = (rowChanged || colChanged) ? "inline-block" : "none";
+  applyBtn.style.visibility = (rowChanged || colChanged) ? "visible" : "hidden";
 }
 
 function setupCanvas() {
   canvas.width = offsetX * 2 + (cols - 1) * cellSize;
   canvas.height = offsetY * 2 + (rows - 1) * cellSize;
   drawBoard();
+}
+
+function setLoadingState(isLoading) {
+  isGameLocked = isLoading;
+  aiStatus.style.display = isLoading ? "block" : "none";
+  canvas.style.cursor = isLoading ? "wait" : "pointer";
 }

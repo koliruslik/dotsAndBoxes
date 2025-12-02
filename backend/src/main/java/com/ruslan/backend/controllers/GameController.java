@@ -1,5 +1,6 @@
 package com.ruslan.backend.controllers;
 
+import com.ruslan.backend.aiPlayer.MiniMax;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -10,11 +11,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.ruslan.backend.aiPlayer.MiniMax.bestMove;
+
 @RestController
 public class GameController {
-    private int currentPlayer = 1;
-    private final List<LineDTO> lines = new ArrayList<>();
-    private final List<SquareDTO> squares = new ArrayList<>();
+    GameState gs;
 
     public static class PlayerDTO {
         public String playerId;
@@ -22,6 +23,7 @@ public class GameController {
         public LineDTO move;
         public int rows;
         public int cols;
+        public int difficulty;
     }
 
     public static class LineDTO {
@@ -38,89 +40,155 @@ public class GameController {
     @GetMapping("/get-state")
     public Map<String, Object> getState() {
         Map<String, Object> response = new HashMap<>();
-        response.put("lines", lines);
-        response.put("squares", squares);
-        response.put("currentPlayer", currentPlayer);
+        if (gs == null) {
+            response.put("lines", new ArrayList<>());
+            response.put("squares", new ArrayList<>());
+            response.put("currentPlayer", 1);
+        } else {
+            response.put("lines", gs.lines);
+            response.put("squares", gs.squares);
+            response.put("currentPlayer", gs.currentPlayer);
+        }
         return response;
     }
 
     @PostMapping("/make-move")
     public Map<String, Object> makeMove(@RequestBody PlayerDTO player) {
-        Map<String, Object> response = new HashMap<>();
-
-        player.move.playerNumber = currentPlayer;
-
-        lines.add(player.move);
-
-        int before = squares.size();
-        checkSquares(lines, currentPlayer, player.rows, player.cols);
-        int after = squares.size();
-
-        if(after == before) {
-            currentPlayer = currentPlayer == 1 ? 2 : 1;
+        if (gs == null) {
+            gs = new GameState();
+            gs.rows = player.rows;
+            gs.cols = player.cols;
+            gs.currentPlayer = 1;
+            gs.lines = new ArrayList<>();
+            gs.squares = new ArrayList<>();
         }
 
-        int totalSquares = (player.rows - 1) * (player.cols - 1);
-        String winner = null;
+        return applyMove(player.move, gs.currentPlayer, null);
+    }
 
-        if(squares.size() == totalSquares) {
-            long p1 = squares.stream().filter(s-> s.playerNumber == 1).count();
-            long p2 = squares.stream().filter(s-> s.playerNumber == 2).count();
+    @PostMapping("/ai-move")
+    public Map<String, Object> aiMove(@RequestBody PlayerDTO player) {
+        int aiPlayer = 2;
 
-            if(p1 > p2) winner = "player1";
-            else if(p2 > p1) winner = "player2";
-            else winner = "winner";
+        int depth = player.difficulty > 0 ? Math.min(player.difficulty, 5) : 3;
+
+        long startTime = System.currentTimeMillis();
+
+        MiniMax.AIResult result = MiniMax.bestMove(gs, aiPlayer, depth);
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+
+        if (result.bestMove == null) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("error", "No moves left");
+            return response;
         }
 
-        response.put("success", true);
-        response.put("lines", lines);
-        response.put("squares", squares);
-        response.put("currentPlayer", currentPlayer);
-        response.put("winner", winner);
-        return response;
+        result.logs.add(0, String.format(" Calculation time: %d ms (Depth: %d)", duration, depth));
+
+        return applyMove(result.bestMove, aiPlayer, result.logs);
     }
 
     @PostMapping("/restart")
     public Map<String, Object> restartGame() {
-        lines.clear();
-        squares.clear();
-        currentPlayer = 1;
+        gs.lines.clear();
+        gs.squares.clear();
+        gs.currentPlayer = 1;
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
-        response.put("lines", lines);
-        response.put("squares", squares);
-        response.put("currentPlayer", currentPlayer);
+        response.put("lines", gs.lines);
+        response.put("squares", gs.squares);
+        response.put("currentPlayer", gs.currentPlayer);
         return response;
     }
 
-    private void checkSquares(List<LineDTO> lines, int playerNumber, int rows, int cols) {
-        for (int i = 0; i < rows - 1; i++) {
-            for (int j = 0; j < cols - 1; j++) {
+    @PostMapping("/set-size")
+    public Map<String, Object> setSize(@RequestBody Map<String, Integer> body) {
+        int rows = body.get("rows");
+        int cols = body.get("cols");
+
+        if (gs == null) gs = new GameState();
+        gs.rows = rows;
+        gs.cols = cols;
+        gs.lines.clear();
+        gs.squares.clear();
+        gs.currentPlayer = 1;
+
+        return Map.of(
+                "success", true,
+                "rows", rows,
+                "cols", cols,
+                "lines", gs.lines,
+                "squares", gs.squares,
+                "currentPlayer", gs.currentPlayer
+        );
+    }
+
+    private Map<String, Object> applyMove(LineDTO move, int playerNumber, List<String> logs) {
+        Map<String, Object> response = new HashMap<>();
+        move.playerNumber = playerNumber;
+        gs.lines.add(move);
+
+        int before = gs.squares.size();
+        checkSquares(gs);
+        int after = gs.squares.size();
+
+        if (after == before) {
+            gs.currentPlayer = gs.currentPlayer == 1 ? 2 : 1;
+        }
+
+        int totalSquares = (gs.rows - 1) * (gs.cols - 1);
+        String winner = null;
+        if (gs.squares.size() == totalSquares) {
+            long p1 = gs.squares.stream().filter(s -> s.playerNumber == 1).count();
+            long p2 = gs.squares.stream().filter(s -> s.playerNumber == 2).count();
+            if (p1 > p2) winner = "player1";
+            else if (p2 > p1) winner = "player2";
+            else winner = "draw";
+        }
+
+        response.put("success", true);
+        response.put("lines", gs.lines);
+        response.put("squares", gs.squares);
+        response.put("currentPlayer", gs.currentPlayer);
+        response.put("winner", winner);
+
+        if (logs != null) {
+            response.put("aiLogs", logs);
+        }
+
+        return response;
+    }
+
+    public static void checkSquares(GameState gs) {
+        for (int i = 0; i < gs.rows - 1; i++) {
+            for (int j = 0; j < gs.cols - 1; j++) {
                 final int fi = i;
                 final int fj = j;
 
-                boolean alreadyClosed = squares.stream()
+                boolean alreadyClosed = gs.squares.stream()
                         .anyMatch(sq -> sq.x == fj && sq.y == fi);
                 if (alreadyClosed) continue;
 
-                boolean top = lines.stream().anyMatch(l -> lMatches(l, fj, fi, fj + 1, fi));
-                boolean bottom = lines.stream().anyMatch(l -> lMatches(l, fj, fi + 1, fj + 1, fi + 1));
-                boolean left = lines.stream().anyMatch(l -> lMatches(l, fj, fi, fj, fi + 1));
-                boolean right = lines.stream().anyMatch(l -> lMatches(l, fj + 1, fi, fj + 1, fi + 1));
+                boolean top = gs.lines.stream().anyMatch(l -> lMatches(l, fj, fi, fj + 1, fi));
+                boolean bottom = gs.lines.stream().anyMatch(l -> lMatches(l, fj, fi + 1, fj + 1, fi + 1));
+                boolean left = gs.lines.stream().anyMatch(l -> lMatches(l, fj, fi, fj, fi + 1));
+                boolean right = gs.lines.stream().anyMatch(l -> lMatches(l, fj + 1, fi, fj + 1, fi + 1));
 
                 if (top && bottom && left && right) {
                     SquareDTO sq = new SquareDTO();
                     sq.x = fj;
                     sq.y = fi;
-                    sq.playerNumber = playerNumber;
-                    squares.add(sq);
+                    sq.playerNumber = gs.currentPlayer;
+                    gs.squares.add(sq);
                 }
             }
         }
     }
 
-    private boolean lMatches(LineDTO l, int x1, int y1, int x2, int y2) {
+    private static boolean lMatches(LineDTO l, int x1, int y1, int x2, int y2) {
         return (l.x1 == x1 && l.y1 == y1 && l.x2 == x2 && l.y2 == y2) ||
                 (l.x1 == x2 && l.y1 == y2 && l.x2 == x1 && l.y2 == y1);
     }
