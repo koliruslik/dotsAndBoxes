@@ -13,6 +13,8 @@ let cols = storedCols;
 let prevRows = rows;
 let prevCols = cols;
 
+let currentGameSessionId = 0;
+
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
 const rowsInput = document.getElementById("rowsInput");
@@ -46,8 +48,13 @@ const difficultyInfo = {
   "4": "Hard (~5-20 sec)."
 };
 
-setupCanvas();
-updateInputConstraints();
+initGame();
+
+function initGame() {
+  setupCanvas();
+  updateInputConstraints();
+  restartGame();
+}
 
 canvas.width = offsetX * 2 + (cols - 1) * cellSize;
 canvas.height = offsetY * 2 + (rows - 1) * cellSize;
@@ -62,6 +69,7 @@ difficultySelect.addEventListener("change", onDifficultyChange);
 canvas.addEventListener("click", handleCanvasClick);
 
 let currentPlayer = 1;
+
 
 function onDifficultyChange() {
   const depth = difficultySelect.value;
@@ -137,6 +145,8 @@ async function handleCanvasClick(e) {
   const clickedLine = getClickedLineFromMouse(e);
   if (!clickedLine || isLineTaken(clickedLine)) return;
 
+  const sessionAtStart = currentGameSessionId;
+
   try {
     const playerData = await playerMove(clickedLine);
     currentPlayer = playerData.currentPlayer;
@@ -159,9 +169,11 @@ async function handleCanvasClick(e) {
     }
   } catch (error) {
     console.error("move error:", error);
-    alert("Error connecting to server");
+    //alert("Error connecting to server");
   } finally {
-    setLoadingState(false);
+    if(currentGameSessionId === sessionAtStart) {
+      setLoadingState(false);
+    }
   }
 }
 
@@ -205,6 +217,8 @@ async function makeAIMove() {
 
 function updateGameState(data) {
   if (!data) return;
+
+  if(data.error === "Game was restarted during calculation") return;
   lines = data.lines || lines;
   squares = data.squares || squares;
   currentPlayer = data.currentPlayer;
@@ -278,6 +292,8 @@ function getClickedLine(mouseX, mouseY){
 }
 
 async function applyBoardSize() {
+
+  currentGameSessionId++;
   const newRows = parseInt(rowsInput.value);
   const newCols = parseInt(colsInput.value);
 
@@ -303,6 +319,8 @@ async function applyBoardSize() {
 
   logContainer.innerHTML = '<div class="log-entry">New game started...</div>';
 
+  setLoadingState(false);
+
   applyBtn.style.visibility = "hidden";
 
   try {
@@ -322,15 +340,18 @@ async function applyBoardSize() {
   } catch (err) {
     console.error("Error setting board size:", err);
   }
-  await restartGame();
 }
 
 async function restartGame() {
+  currentGameSessionId++;
+
   try {
     await fetch(`${API_BASE}/restart`, { method: "POST" });
 
     lines = [];
     squares = [];
+
+    setLoadingState(false);
 
     logContainer.innerHTML = '<div class="log-entry">Game restarted...</div>';
 

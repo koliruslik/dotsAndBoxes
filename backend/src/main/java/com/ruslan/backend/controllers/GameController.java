@@ -17,6 +17,8 @@ import static com.ruslan.backend.aiPlayer.MiniMax.bestMove;
 public class GameController {
     GameState gs;
 
+    private long currentSessionId = System.currentTimeMillis();
+
     public static class PlayerDTO {
         public String playerId;
         public List<LineDTO> lines;
@@ -68,8 +70,9 @@ public class GameController {
 
     @PostMapping("/ai-move")
     public Map<String, Object> aiMove(@RequestBody PlayerDTO player) {
-        int aiPlayer = 2;
+        long sessionAtStart = this.currentSessionId;
 
+        int aiPlayer = 2;
         int depth = player.difficulty > 0 ? Math.min(player.difficulty, 5) : 3;
 
         long startTime = System.currentTimeMillis();
@@ -78,6 +81,15 @@ public class GameController {
 
         long endTime = System.currentTimeMillis();
         long duration = endTime - startTime;
+
+        if (sessionAtStart != this.currentSessionId) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("error", "Game was restarted during calculation");
+            response.put("lines", gs.lines);
+            response.put("squares", gs.squares);
+            response.put("currentPlayer", gs.currentPlayer);
+            return response;
+        }
 
         if (result.bestMove == null) {
             Map<String, Object> response = new HashMap<>();
@@ -92,16 +104,17 @@ public class GameController {
 
     @PostMapping("/restart")
     public Map<String, Object> restartGame() {
-        gs.lines.clear();
-        gs.squares.clear();
-        gs.currentPlayer = 1;
+        this.currentSessionId = System.currentTimeMillis();
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        response.put("lines", gs.lines);
-        response.put("squares", gs.squares);
-        response.put("currentPlayer", gs.currentPlayer);
-        return response;
+        if (gs != null) {
+            gs.lines.clear();
+            gs.squares.clear();
+            gs.currentPlayer = 1;
+        } else {
+            initGame(5, 5);
+        }
+
+        return buildStateResponse(true);
     }
 
     @PostMapping("/set-size")
@@ -109,21 +122,32 @@ public class GameController {
         int rows = body.get("rows");
         int cols = body.get("cols");
 
-        if (gs == null) gs = new GameState();
+        this.currentSessionId = System.currentTimeMillis();
+        initGame(rows, cols);
+
+        return buildStateResponse(true);
+    }
+
+    private void initGame(int rows, int cols) {
+        gs = new GameState();
         gs.rows = rows;
         gs.cols = cols;
-        gs.lines.clear();
-        gs.squares.clear();
+        gs.lines = new ArrayList<>();
+        gs.squares = new ArrayList<>();
         gs.currentPlayer = 1;
+    }
 
-        return Map.of(
-                "success", true,
-                "rows", rows,
-                "cols", cols,
-                "lines", gs.lines,
-                "squares", gs.squares,
-                "currentPlayer", gs.currentPlayer
-        );
+    private Map<String, Object> buildStateResponse(boolean success) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", success);
+        if (gs != null) {
+            response.put("rows", gs.rows);
+            response.put("cols", gs.cols);
+            response.put("lines", gs.lines);
+            response.put("squares", gs.squares);
+            response.put("currentPlayer", gs.currentPlayer);
+        }
+        return response;
     }
 
     private Map<String, Object> applyMove(LineDTO move, int playerNumber, List<String> logs) {
@@ -192,5 +216,7 @@ public class GameController {
         return (l.x1 == x1 && l.y1 == y1 && l.x2 == x2 && l.y2 == y2) ||
                 (l.x1 == x2 && l.y1 == y2 && l.x2 == x1 && l.y2 == y1);
     }
+
+
 }
 
